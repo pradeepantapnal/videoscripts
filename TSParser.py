@@ -1,28 +1,22 @@
 # Author: Miguel Martinez Lopez
 # Version: 0.4
 
-try:
-	import Tkinter
-	import ttk
-
-	from Tkinter import StringVar
-	import tkFont
-	import tkMessageBox
-	import tkFileDialog
-	from ttk import Style
-	from Tkconstants import *
-except ImportError:
-	import tkinter
-	import tkinter.ttk as ttk
-
-	from tkinter import StringVar
-	import tkinter.font as tkFont
-	from tkinter.ttk import Style
-	from tkinter.constants import *
+import tkinter as tk
+from tkinter import ttk
+from tkinter import StringVar
+import tkinter.font as tkFont
+from tkinter.ttk import Style
+from tkinter.constants import *
 
 import struct
 import sys
-from optparse import OptionParser
+import argparse
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+
+PACKET_SYNC_BYTE = 0x47
+MAX_PACKET_COUNT = 1450000
 
 class SystemClock:
 	def __init__(self):
@@ -57,6 +51,9 @@ class PESPacketInfo:
 		return self.AUType
 
 def readFile(filehandle, startPos, width):
+	"""Return a big-endian integer read from *filehandle* starting at
+	*startPos* with the given byte *width* (1, 2 or 4)."""
+
 	filehandle.seek(startPos,0)
 	if width == 4:
 		string = filehandle.read(4)
@@ -173,12 +170,12 @@ def parsePATSection(filehandle, k):
 	local = readFile(filehandle,k,4)
 	table_id = (local>>24)
 	if (table_id != 0x0):
-		print ('Ooops! error in parsePATSection()!')
+		logging.info('Ooops! error in parsePATSection()!')
 		return
 
-	print ('------- PAT Information -------')
+	logging.info('------- PAT Information -------')
 	section_length = (local>>8)&0xFFF
-	print ('section_length = %d' %section_length)
+	logging.info('section_length = %d' %section_length)
 
 	transport_stream_id = (local&0xFF) << 8;
 	local = readFile(filehandle, k+4, 4)
@@ -188,7 +185,7 @@ def parsePATSection(filehandle, k):
 	current_next_indicator = (local>>16)&0x1
 	section_number = (local>>8)&0xFF
 	last_section_number = local&0xFF;
-	print ('section_number = %d, last_section_number = %d' %(section_number, last_section_number))
+	logging.info('section_number = %d, last_section_number = %d' %(section_number, last_section_number))
 
 	length = section_length - 4 - 5
 	j = k + 8
@@ -197,15 +194,15 @@ def parsePATSection(filehandle, k):
 		local = readFile(filehandle, j, 4)
 		program_number = (local >> 16)
 		program_map_PID = local & 0x1FFF
-		print ('program_number = 0x%X' %program_number)
+		logging.info('program_number = 0x%X' %program_number)
 		if (program_number == 0):
-			print ('network_PID = 0x%X' %program_map_PID)
+			logging.info('network_PID = 0x%X' %program_map_PID)
 		else:
-			print ('program_map_PID = 0x%X' %program_map_PID)
+			logging.info('program_map_PID = 0x%X' %program_map_PID)
 		length = length - 4;
 		j += 4
 		
-		print ('')
+		logging.info('')
 
 def parsePMTSection(filehandle, k):
 
@@ -213,40 +210,40 @@ def parsePMTSection(filehandle, k):
 
 	table_id = (local>>24)
 	if (table_id != 0x2):
-		print ('Ooops! error in parsePATSection()!')
+		logging.info('Ooops! error in parsePATSection()!')
 		return
 
-	print ('------- PMT Information -------')
+	logging.info('------- PMT Information -------')
 
 	section_length = (local>>8)&0xFFF
-	print ('section_length = %d' %section_length)
+	logging.info('section_length = %d' %section_length)
 
 	program_number = (local&0xFF) << 8;
 
 	local = readFile(filehandle, k+4, 4)
 
 	program_number += (local>>24)&0xFF
-	print ('program_number = %d' %program_number)
+	logging.info('program_number = %d' %program_number)
 
 	version_number = (local>>17)&0x1F
 	current_next_indicator = (local>>16)&0x1
 	section_number = (local>>8)&0xFF
 	last_section_number = local&0xFF;
-	print ('section_number = %d, last_section_number = %d' %(section_number, last_section_number))
+	logging.info('section_number = %d, last_section_number = %d' %(section_number, last_section_number))
 
 	local = readFile(filehandle, k+8, 4)
 
 	PCR_PID = (local>>16)&0x1FFF
-	print ('PCR_PID = 0x%X' %PCR_PID)
+	logging.info('PCR_PID = 0x%X' %PCR_PID)
 	program_info_length = (local&0xFFF)
-	print ('program_info_length = %d' %program_info_length)
+	logging.info('program_info_length = %d' %program_info_length)
 
 	n = program_info_length
 	m = k + 12;
 	while (n>0):
 		descriptor_tag = readFile(filehandle, m, 1)
 		descriptor_length = readFile(filehandle, m+1, 1)
-		print ('descriptor_tag = %d, descriptor_length = %d' %(descriptor_tag, descriptor_length))
+		logging.info('descriptor_tag = %d, descriptor_length = %d' %(descriptor_tag, descriptor_length))
 		n -= descriptor_length + 2
 		m += descriptor_length + 2
 
@@ -261,13 +258,13 @@ def parsePMTSection(filehandle, k):
 		elementary_PID = (local2>>16)&0x1FFF
 		ES_info_length = local2&0xFFF
 
-		print ('stream_type = 0x%X, elementary_PID = 0x%X, ES_info_length = %d' %(stream_type, elementary_PID, ES_info_length))
+		logging.info('stream_type = 0x%X, elementary_PID = 0x%X, ES_info_length = %d' %(stream_type, elementary_PID, ES_info_length))
 		n = ES_info_length
 		m = j+5;
 		while (n>0):
 			descriptor_tag = readFile(filehandle, m, 1)
 			descriptor_length = readFile(filehandle, m+1, 1)
-			print ('descriptor_tag = %d, descriptor_length = %d' %(descriptor_tag, descriptor_length))
+			logging.info('descriptor_tag = %d, descriptor_length = %d' %(descriptor_tag, descriptor_length))
 			n -= descriptor_length + 2
 			m += descriptor_length + 2
 
@@ -275,35 +272,35 @@ def parsePMTSection(filehandle, k):
 		j += 5 + ES_info_length
 		length -= 5 + ES_info_length
 
-	print ('')
+	logging.info('')
 
 def parseSITSection(filehandle, k):
 	local = readFile(filehandle,k,4)
 
 	table_id = (local>>24)
 	if (table_id != 0x7F):
-		print ('Ooops! error in parseSITSection()!')
+		logging.info('Ooops! error in parseSITSection()!')
 		return
 
-	print ('------- SIT Information -------')
+	logging.info('------- SIT Information -------')
 
 	section_length = (local>>8)&0xFFF
-	print ('section_length = %d' %section_length)
+	logging.info('section_length = %d' %section_length)
 	local = readFile(filehandle, k+4, 4)
 
 	section_number = (local>>8)&0xFF
 	last_section_number = local&0xFF;
-	print ('section_number = %d, last_section_number = %d' %(section_number, last_section_number))
+	logging.info('section_number = %d, last_section_number = %d' %(section_number, last_section_number))
 	local = readFile(filehandle, k+8, 2)
 	transmission_info_loop_length = local&0xFFF
-	print ('transmission_info_loop_length = %d' %transmission_info_loop_length)
+	logging.info('transmission_info_loop_length = %d' %transmission_info_loop_length)
 
 	n = transmission_info_loop_length
 	m = k + 10;
 	while (n>0):
 		descriptor_tag = readFile(filehandle, m, 1)
 		descriptor_length = readFile(filehandle, m+1, 1)
-		print ('descriptor_tag = %d, descriptor_length = %d' %(descriptor_tag, descriptor_length))
+		logging.info('descriptor_tag = %d, descriptor_length = %d' %(descriptor_tag, descriptor_length))
 		n -= descriptor_length + 2
 		m += descriptor_length + 2
 
@@ -314,22 +311,31 @@ def parseSITSection(filehandle, k):
 		local1 = readFile(filehandle, j, 4)
 		service_id = (local1>>16)&0xFFFF;
 		service_loop_length = local1&0xFFF
-		print ('service_id = %d, service_loop_length = %d' %(service_id, service_loop_length))
+		logging.info('service_id = %d, service_loop_length = %d' %(service_id, service_loop_length))
 
 		n = service_loop_length
 		m = j+4;
 		while (n>0):
 			descriptor_tag = readFile(filehandle, m, 1)
 			descriptor_length = readFile(filehandle, m+1, 1)
-			print ('descriptor_tag = %d, descriptor_length = %d' %(descriptor_tag, descriptor_length))
+			logging.info('descriptor_tag = %d, descriptor_length = %d' %(descriptor_tag, descriptor_length))
 			n -= descriptor_length + 2
 			m += descriptor_length + 2
 
 		j += 4 + service_loop_length
 		length -= 4 + service_loop_length
-	print ('')
+	logging.info('')
 
 def parseTSMain(filehandle, packet_size, mode, pid, psi_mode, searchItem):
+	"""Parse a transport stream and log information about its packets.
+	
+	*filehandle* -- open file object positioned at the beginning of the TS
+	*packet_size* -- size of each transport stream packet
+	*mode* -- parsing mode (PAT, PMT, SIT, ES)
+	*pid* -- PID to inspect when parsing ES packets
+	*psi_mode* -- additional PSI output mode
+	*searchItem* -- item type to search for (PAT, PMT, PCR, SIT)
+	"""
 
 	PCR = SystemClock()
 	PESPktInfo = PESPacketInfo()
@@ -362,7 +368,7 @@ def parseTSMain(filehandle, packet_size, mode, pid, psi_mode, searchItem):
 
 			syncByte = (PacketHeader>>24)
 			if (syncByte != 0x47):
-				print ('Ooops! Can NOT found Sync_Byte! maybe something wrong with the file')
+				logging.info('Ooops! Can NOT found Sync_Byte! maybe something wrong with the file')
 				break
 
 			payload_unit_start_indicator = (PacketHeader>>22)&0x1
@@ -384,7 +390,7 @@ def parseTSMain(filehandle, packet_size, mode, pid, psi_mode, searchItem):
 					if (((flags>>7)&0x1)):
 						discontinuity = 'discontinuity: true'
 
-					print ('PCR packet, packet No. %d, PID = 0x%x, PCR_base = hi:0x%X lo:0x%X PCR_ext = 0x%X %s' \
+					logging.info('PCR packet, packet No. %d, PID = 0x%x, PCR_base = hi:0x%X lo:0x%X PCR_ext = 0x%X %s' \
 					%(packetCount, PID, PCR.PCR_base_hi, PCR.PCR_base_lo, PCR.PCR_extension, discontinuity))
 
 			if (adaptation_fieldc_trl == 0x1)|(adaptation_fieldc_trl == 0x3):
@@ -396,23 +402,23 @@ def parseTSMain(filehandle, packet_size, mode, pid, psi_mode, searchItem):
 
 					parsePESHeader(filehandle, n+Adaptation_Field_Length+4, PESPktInfo)
 					PTS_MSB24 = ((PESPktInfo.PTS_hi&0x1)<<23)|((PESPktInfo.PTS_lo>>9)&0x7FFFFF)
-					print ('PES start, packet No. %d, PID = 0x%x, PTS_MSB24 = 0x%x PTS_hi = 0x%X, PTS_low = 0x%X' \
+					logging.info('PES start, packet No. %d, PID = 0x%x, PTS_MSB24 = 0x%x PTS_hi = 0x%X, PTS_low = 0x%X' \
 					%(packetCount, PID, PTS_MSB24, PESPktInfo.PTS_hi, PESPktInfo.PTS_lo))
 
 					if (mode == 'ES'):
-						print ('packet No. %d,	ES PID = 0x%X,	Steam_ID = 0x%X,  AU_Type = %s' \
+						logging.info('packet No. %d,	ES PID = 0x%X,	Steam_ID = 0x%X,  AU_Type = %s' \
 						%(packetCount, PID, PESPktInfo.getStreamID(), PESPktInfo.getAUType()))
 
 						if (idr_flag == True):
 							EntryPESPacketNumList.append(last_SameES_packetNo - last_EntryTPI +1)
-							print ('packet No. %d, ES PID = 0x%X, Steam_ID = 0x%X, AU_Type = %s' \
+							logging.info('packet No. %d, ES PID = 0x%X, Steam_ID = 0x%X, AU_Type = %s' \
 							%(packetCount, PID, PESPktInfo.getStreamID(), PESPktInfo.getAUType()))
 
 
 						if (PESPktInfo.getAUType() == "IDR_picture"):
 							idr_flag = True
 							last_EntryTPI = packetCount
-							print ('packet No. %d, ES PID = 0x%X, Steam_ID = 0x%X, AU_Type = %s' \
+							logging.info('packet No. %d, ES PID = 0x%X, Steam_ID = 0x%X, AU_Type = %s' \
 							%(packetCount, PID, PESPktInfo.getStreamID(), PESPktInfo.getAUType()))
 							TPIList.append(packetCount)
 							PTSList.append(PTS_MSB24)
@@ -426,7 +432,7 @@ def parseTSMain(filehandle, packet_size, mode, pid, psi_mode, searchItem):
 					table_id = readFile(filehandle,n+Adaptation_Field_Length+4+1+pointer_field,1)
 
 					if ((table_id == 0x0)&(PID != 0x0)):
-						print ('Ooops!, Something wrong in packet No. %d' %packetCount)
+						logging.info('Ooops!, Something wrong in packet No. %d' %packetCount)
 
 					k = n+Adaptation_Field_Length+4+1+pointer_field
 
@@ -447,7 +453,7 @@ def parseTSMain(filehandle, packet_size, mode, pid, psi_mode, searchItem):
 									packetCount += 1
 								continue
 								
-							print ('pasing PAT Packet! packet No. %d, PID = 0x%X' %(packetCount, PID),parsePATSection(filehandle, k))
+							logging.info('pasing PAT Packet! packet No. %d, PID = 0x%X' %(packetCount, PID),parsePATSection(filehandle, k))
 							if (psi_mode == 0):
 								return
 
@@ -468,7 +474,7 @@ def parseTSMain(filehandle, packet_size, mode, pid, psi_mode, searchItem):
 									n += packet_size
 									packetCount += 1
 									continue
-							print ('pasing PMT Packet! packet No. %d, PID = 0x%X' %(packetCount, PID),\
+							logging.info('pasing PMT Packet! packet No. %d, PID = 0x%X' %(packetCount, PID),\
 							parsePMTSection(filehandle, k))
 							if (psi_mode == 0):
 								return
@@ -486,7 +492,7 @@ def parseTSMain(filehandle, packet_size, mode, pid, psi_mode, searchItem):
 									n += packet_size
 									packetCount += 1
 									continue
-							print ('pasing SIT Packet! packet No. %d, PID = 0x%X' %(packetCount, PID),\
+							logging.info('pasing SIT Packet! packet No. %d, PID = 0x%X' %(packetCount, PID),\
 							parseSITSection(filehandle, k))
 							if (psi_mode == 0):
 								return
@@ -514,13 +520,13 @@ def parseTSMain(filehandle, packet_size, mode, pid, psi_mode, searchItem):
 				break
 
 	except IOError:
-		print ('IO error! maybe reached EOF')
+		logging.info('IO error! maybe reached EOF')
 	else:
 		filehandle.close()
 
-	print ('================================================\n')
+	logging.info('================================================\n')
 	for i in range(len(EntryPESPacketNumList)):
-			print ('TPI = 0x%x, PTS = 0x%x, EntryPESPacketNum = 0x%x' %(TPIList[i], PTSList[i], EntryPESPacketNumList[i]))
+			logging.info('TPI = 0x%x, PTS = 0x%x, EntryPESPacketNum = 0x%x' %(TPIList[i], PTSList[i], EntryPESPacketNumList[i]))
 
 
 def getFilename():
@@ -532,67 +538,57 @@ def getFilename():
 	return filename;
 
 def Main():
+        """Parse command line arguments and start TS parsing."""
 
-	description = "This is a python script for parsing MPEG-2 TS stream"
-	usage = "\n\t%prog -t <188|192|204> -m PAT\
-	\n\t%prog -t <188|192|204> -m <PMT|ES|SIT> PID\
-	\n\t%prog -s PCR \
-	\n\t%prog -s <PAT|PMT|SIT> --all \
-	\n\t%prog -s <PAT|PMT|SIT> --unique\n\n \
-	Example: TSParser.py -t 188 -m PMT 1fc8"
+        description = "This is a python script for parsing MPEG-2 TS stream"
+        epilog = "Example: TSParser.py -t 188 -m PMT 1fc8"
 
-	cml_parser = OptionParser(description = description, usage=usage)
-	cml_parser.add_option("-f", "--file", action="store", type="string", dest="filename", default="",
-		help="specify file name, if not specified, a file open dialogbox will be shown.")
+        parser = argparse.ArgumentParser(description=description, epilog=epilog,
+                                        formatter_class=argparse.RawDescriptionHelpFormatter)
+        parser.add_argument('-f', '--file', dest='filename', default='',
+                            help='specify file name, if not specified, a file open dialogbox will be shown.')
+        parser.add_argument('-t', '--type', dest='packet_size', type=int, default=188,
+                            help='specify TS packet size[188, 192, 204], default = 188')
+        parser.add_argument('-m', '--mode', dest='mode', default='PAT',
+                            help='specify parsing mode[PAT, PMT, SIT, ES], default = PAT')
+        parser.add_argument('-s', '--search', dest='searchItem', default='FFF',
+                            help='search PAT/PMT/PCR/SIT packets and output Information.')
+        parser.add_argument('--all', dest='psi_mode', action='store_const', const=1, default=0,
+                            help='Output all PAT/PMT/SIT packets Information. default, only the first one is output.')
+        parser.add_argument('--unique', dest='psi_mode', action='store_const', const=2,
+                            help='Output unique PAT/PMT/SIT packets Information. default, only the first one is output.')
+        parser.add_argument('pid', nargs='?', help='PID in hex when parsing ES')
 
-	cml_parser.add_option("-t", "--type", action="store", type="int", dest="packet_size", default="188",
-		help="specify TS packet size[188, 192, 204], default = 188")
+        opts = parser.parse_args()
 
-	cml_parser.add_option("-m", "--mode", action="store", type="string", dest="mode", default="PAT",
-		help="specify parsing mode[PAT, PMT, SIT, ES], default = PAT")
+        if (opts.searchItem == "FFF") and (opts.mode != "PAT") and (opts.pid is None):
+                parser.print_help()
+                return
 
-	cml_parser.add_option("-s", "--search", action="store", type="string", dest="searchItem", default="FFF",
-		help="search PAT/PMT/PCR/SIT packets and output Information.")
+        if (opts.searchItem == "FFF") and (opts.mode != "PAT"):
+                pid = int(opts.pid, 16)
+        else:
+                pid = 0
 
-	cml_parser.add_option("--all", action="store_const", const=1, dest="psi_mode", default=0,
-		help="Output all PAT/PMT/SIT packets Information. default, only the first one is output.")
+        if opts.searchItem not in ("FFF", "PAT", "PMT", "PCR", "SIT"):
+                parser.print_help()
+                return
 
-	cml_parser.add_option("--unique", action="store_const", const=2, dest="psi_mode", default=0,
-		help="Output unique PAT/PMT/SIT packets Information. default, only the first one is output.")
+        psi_mode = 0
+        if opts.searchItem != "FFF":
+                psi_mode = opts.psi_mode
 
-	(opts, args) = cml_parser.parse_args(sys.argv)
+        if opts.filename == "":
+                filename = getFilename()
+        else:
+                filename = opts.filename
 
-	if ((opts.searchItem == "FFF") & (opts.mode != "PAT") & (len(args) < 2)):
-		cml_parser.print_help()
-		return
+        if filename == "":
+                return
 
-	if ((opts.searchItem == "FFF") & (opts.mode != "PAT")):
-		pid = int(args[1], 16)
-	else:
-		pid = 0;
-
-	if ((opts.searchItem != "FFF") & (opts.searchItem != "PAT") & \
-		(opts.searchItem != "PMT") & (opts.searchItem != "PCR") &
-		(opts.searchItem != "SIT")):
-		cml_parser.print_help()
-		return
-
-	psi_mode = 0
-	if (opts.searchItem != "FFF"):
-		psi_mode = opts.psi_mode
-
-	if (opts.filename == ""):
-		filename = getFilename()
-	else:
-		filename = opts.filename
-	
-	if (filename == ""):
-		return
-
-	print (filename)
-	filehandle = open(filename,'rb')
-
-	parseTSMain(filehandle, opts.packet_size, opts.mode, pid, psi_mode, opts.searchItem)
+        logging.info(filename)
+        with open(filename, 'rb') as filehandle:
+                parseTSMain(filehandle, opts.packet_size, opts.mode, pid, psi_mode, opts.searchItem)
 
 
 if __name__ == "__main__":
