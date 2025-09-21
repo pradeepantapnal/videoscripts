@@ -1,10 +1,10 @@
 #!/usr/bin/env python
-"""Utilities for finding the optimum bitrate of videos with FFmpeg.
-
-
-Run ``python findOptimumBitrate.py --help`` for a full list of options.
-"""
-
+ """Utilities for finding the optimum bitrate of videos with FFmpeg.
+ 
+ 
+ Run ``python findOptimumBitrate.py --help`` for a full list of options.
+ """
+ 
 from __future__ import annotations
 
 import argparse
@@ -13,9 +13,32 @@ import math
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping, MutableMapping, Sequence
+from os import PathLike
+from typing import Any, Iterable, Mapping, MutableMapping, Sequence, TypeAlias
+
+Pathish: TypeAlias = str | PathLike[str] | Path
+
+__all__ = [
+    "AnalysisConfig",
+    "AnalysisResult",
+    "Pathish",
+    "VideoStream",
+    "VideoProbe",
+    "analyse_path",
+    "analyse_paths",
+    "bitrate_from_bits_per_pixel",
+    "bits_per_pixel",
+    "format_bitrate",
+    "parse_arguments",
+    "parse_ffprobe_output",
+    "parse_fraction",
+    "parse_video_stream",
+    "recommend_bitrate",
+    "request",
+    "run_ffprobe",
+]
 
 __author__ = "Pradeep Antapnal"
 VERSION = "1.1.0"
@@ -160,7 +183,7 @@ def parse_ffprobe_output(path: Path, payload: MutableMapping[str, Any]) -> Video
     )
 
 
-def run_ffprobe(path: Path, ffprobe_cmd: str = "ffprobe") -> VideoProbe:
+def run_ffprobe(path: Pathish, ffprobe_cmd: str = "ffprobe") -> VideoProbe:
     """Execute ffprobe and return the parsed :class:`VideoProbe` information."""
 
     command = [
@@ -182,7 +205,7 @@ def run_ffprobe(path: Path, ffprobe_cmd: str = "ffprobe") -> VideoProbe:
         raise RuntimeError("Invalid ffprobe output") from exc
     if not isinstance(payload, MutableMapping):
         raise RuntimeError("Unexpected ffprobe payload")
-    return parse_ffprobe_output(path, payload)
+    return parse_ffprobe_output(Path(path), payload)
 
 
 def bitrate_from_bits_per_pixel(
@@ -261,66 +284,105 @@ def format_bitrate(bitrate: int) -> str:
     return f"{bitrate / 1_000_000:.2f} Mbps"
 
 
-def analyse_paths(paths: Iterable[Path], args: argparse.Namespace) -> list[dict[str, Any]]:
+@dataclass(slots=True)
+class AnalysisConfig:
+    """Configuration values shared between the CLI and programmatic API."""
+
+    target_bpp: float = 0.085
+    fallback_fps: float = 30.0
+    minimum: int | None = None
+    maximum: int | None = None
+    ffprobe: str = field(default_factory=lambda: os.environ.get("FFPROBE", "ffprobe"))
+
+
+@dataclass(slots=True)
+class AnalysisResult:
+    """Container for the result of :func:`analyse_paths`."""
+
+    probe: VideoProbe
+    recommendation: int | None
+    error: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Represent the result as a JSON-serialisable dictionary."""
+
+        data: dict[str, Any] = {
+            "path": str(self.probe.path),
+            "duration": self.probe.duration,
+            "size_bytes": self.probe.size_bytes,
+            "format_bitrate": self.probe.format_bitrate,
+            "video": {
+                "width": self.probe.video.width if self.probe.video else None,
+                "height": self.probe.video.height if self.probe.video else None,
+                "codec": self.probe.video.codec if self.probe.video else None,
+                "fps": self.probe.video.fps if self.probe.video else None,
+                "bitrate": self.probe.video.bitrate if self.probe.video else None,
+            },
+            "recommendation": self.recommendation,
+        }
+        if self.error is not None:
+            data["error"] = self.error
+        return data
+
+
+def analyse_paths(
+    paths: Iterable[Pathish],
+    config: AnalysisConfig | None = None,
+) -> list[AnalysisResult]:
     """Run ``ffprobe`` on *paths* and build a structured report."""
 
-    results: list[dict[str, Any]] = []
-    for path in paths:
-        probe = run_ffprobe(path, ffprobe_cmd=args.ffprobe)
+    if config is None:
+        config = AnalysisConfig()
+
+    resolved_paths = [Path(p) for p in paths]
+    results: list[AnalysisResult] = []
+    for path in resolved_paths:
+        probe = run_ffprobe(path, ffprobe_cmd=config.ffprobe)
         try:
             recommendation = recommend_bitrate(
                 probe,
-                target_bpp=args.target_bpp,
-                fallback_fps=args.fallback_fps,
-                minimum=args.minimum,
-                maximum=args.maximum,
+                target_bpp=config.target_bpp,
+                fallback_fps=config.fallback_fps,
+                minimum=config.minimum,
+                maximum=config.maximum,
             )
         except ValueError as exc:
-            recommendation = None
-            error = str(exc)
+            results.append(AnalysisResult(probe=probe, recommendation=None, error=str(exc)))
         else:
-            error = None
-
-        info: dict[str, Any] = {
-            "path": str(path),
-            "duration": probe.duration,
-            "size_bytes": probe.size_bytes,
-            "format_bitrate": probe.format_bitrate,
-            "video": {
-                "width": probe.video.width if probe.video else None,
-                "height": probe.video.height if probe.video else None,
-                "codec": probe.video.codec if probe.video else None,
-                "fps": probe.video.fps if probe.video else None,
-                "bitrate": probe.video.bitrate if probe.video else None,
-            },
-            "recommendation": recommendation,
-        }
-        if error:
-            info["error"] = error
-        results.append(info)
+            results.append(AnalysisResult(probe=probe, recommendation=recommendation, error=None))
     return results
+
+
+def analyse_path(
+    path: Pathish,
+    config: AnalysisConfig | None = None,
+) -> AnalysisResult:
+    """Convenience wrapper returning a single :class:`AnalysisResult`."""
+
+    return analyse_paths([path], config=config)[0]
 
 
 def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Build and parse the command line arguments."""
 
+    defaults = AnalysisConfig()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("paths", nargs="+", help="Video files to analyse")
     parser.add_argument(
         "--ffprobe",
-        default=os.environ.get("FFPROBE", "ffprobe"),
+        default=defaults.ffprobe,
         help="ffprobe executable to invoke",
     )
     parser.add_argument(
         "--target-bpp",
         type=float,
-        default=0.085,
+        default=defaults.target_bpp,
         help="Desired bits per pixel (default: %(default)s)",
     )
     parser.add_argument(
         "--fallback-fps",
         type=float,
-        default=30.0,
+        default=defaults.fallback_fps,
         help="Fallback FPS when ffprobe does not report a frame rate",
     )
     parser.add_argument(
@@ -345,29 +407,35 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_arguments(argv)
-    paths = [Path(p) for p in args.paths]
-    report = analyse_paths(paths, args)
+    config = AnalysisConfig(
+        target_bpp=args.target_bpp,
+        fallback_fps=args.fallback_fps,
+        minimum=args.minimum,
+        maximum=args.maximum,
+        ffprobe=args.ffprobe,
+    )
+    report = analyse_paths(args.paths, config=config)
 
     if args.json:
-        json.dump(report, sys.stdout, indent=2)
+        json.dump([item.to_dict() for item in report], sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 0
 
     for item in report:
-        path = item["path"]
-        print(path)
-        video = item["video"]
-        if item.get("duration") is not None:
-            print(f"  Duration: {item['duration']:.2f} s")
+        data = item.to_dict()
+        print(data["path"])
+        video = data["video"]
+        if data.get("duration") is not None:
+            print(f"  Duration: {data['duration']:.2f} s")
         if video.get("width") and video.get("height"):
             print(f"  Resolution: {video['width']}x{video['height']}")
         if video.get("fps"):
             print(f"  Frame rate: {video['fps']:.2f} fps")
-        if item.get("recommendation"):
-            formatted = format_bitrate(int(item["recommendation"]))
+        if item.recommendation is not None:
+            formatted = format_bitrate(int(item.recommendation))
             print(f"  Recommended bitrate: {formatted}")
-        if "error" in item:
-            print(f"  Error: {item['error']}")
+        if item.error is not None:
+            print(f"  Error: {item.error}")
         print()
     return 0
 
