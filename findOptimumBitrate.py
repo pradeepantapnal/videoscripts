@@ -1,10 +1,10 @@
 #!/usr/bin/env python
-"""Utilities for finding the optimum bitrate of videos with FFmpeg.
-
-
-Run ``python findOptimumBitrate.py --help`` for a full list of options.
-"""
-
+ """Utilities for finding the optimum bitrate of videos with FFmpeg.
+ 
+ 
+ Run ``python findOptimumBitrate.py --help`` for a full list of options.
+ """
+ 
 from __future__ import annotations
 
 import argparse
